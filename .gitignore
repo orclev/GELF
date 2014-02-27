@@ -7,3 +7,4 @@ cabal-dev
 .virthualenv
 gelf.sublime-project
 gelf.sublime-workspace
+.floo
