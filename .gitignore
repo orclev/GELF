@@ -8,3 +8,5 @@ cabal-dev
 gelf.sublime-project
 gelf.sublime-workspace
 .floo
+cabal.sandbox.config
+.cabal-sandbox
