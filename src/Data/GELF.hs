@@ -1,12 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Data.GELF where
+module Data.GELF ( GELF (..)
+                 , LogLevel (..)
+                 , Field (..)
+                 , AdditionalFields
+                 )where
 
 import Data.Text
 import Data.Aeson
 import Data.Aeson.Types
 import Data.Time.Clock
 import Data.Time.Format
-import Data.HashMap as HM
+import Data.HashMap.Strict as HM
 import Data.Scientific
 import Data.Maybe
 import System.Locale
@@ -16,7 +20,7 @@ import System.IO.Unsafe
 import Control.Monad (mzero)
 
 data LogLevel = Emergency | Alert | Critical | Error | Warning | Notice | Informational | Debug
-  deriving (Enum, Show, Eq)
+  deriving (Enum, Show, Eq, Bounded)
 
 instance FromJSON LogLevel where
   parseJSON n = toEnum <$> parseJSON n
@@ -24,7 +28,7 @@ instance FromJSON LogLevel where
 data Field = NumberField !Scientific | StringField !Text
   deriving (Show, Eq)
 
-type AdditionalFields = Map Text Field
+type AdditionalFields = HashMap Text Field
 
 data GELF = GELF { gelfVersion :: !Text
                  , gelfHost :: !Text
@@ -38,6 +42,18 @@ data GELF = GELF { gelfVersion :: !Text
                  , gelfAdditionalFields :: AdditionalFields
                  } deriving (Show)
 
+instance Eq GELF where
+  (==) a b = gelfVersion a == gelfVersion b
+             && gelfHost a == gelfHost b
+             && gelfShortMessage a == gelfShortMessage b
+             && gelfFullMessage a == gelfFullMessage b
+             && gelfLevel a == gelfLevel b
+             && gelfFacility a == gelfFacility b
+             && gelfLine a == gelfLine b
+             && gelfFile a == gelfFile b
+             -- && gelfTimestamp a == gelfTimestamp b
+             -- && gelfAdditionalFields a == gelfAdditionalFields b
+
 instance Default GELF where
   def = GELF "1.1" "GELF" "Unknown" Nothing (Just now) (Just Alert) Nothing Nothing Nothing HM.empty
     where
@@ -45,6 +61,12 @@ instance Default GELF where
 
 formatPosixTime :: FormatTime t => t -> String
 formatPosixTime = formatTime defaultTimeLocale "%s%Q"
+
+parsePosixTime :: ParseTime t => String -> Maybe t
+parsePosixTime = parseTime defaultTimeLocale "%s%Q"
+
+maybeParsePosixTime :: ParseTime t => Maybe String -> Maybe t
+maybeParsePosixTime s = s >>= parsePosixTime
 
 instance ToJSON GELF where
   toJSON g = object $ (catMaybes [ Just ("version" .= unpack (gelfVersion g))
@@ -54,7 +76,7 @@ instance ToJSON GELF where
                                  , (.=) "timestamp" . formatPosixTime <$> gelfTimestamp g
                                  , (.=) "level" . fromEnum <$> gelfLevel g
                                  , (.=) "facility" . unpack <$> gelfFacility g
-                                 , (.=) "line" . show <$> gelfLine g
+                                 , (.=) "line" <$> gelfLine g
                                  , (.=) "file" . unpack <$> gelfFile g])
                       ++ fieldsToPairs (gelfAdditionalFields g)
 
@@ -74,7 +96,7 @@ fieldToPair name (StringField x) = (cons '_' name) .= (unpack x)
 -- >>> fieldsToPairs (fromList [(pack "Test", StringField $ pack "Testing"),(pack "Test2", NumberField 3.14159)])
 -- [("_Test",String "Testing"),("_Test2",Number 3.14159)]
 fieldsToPairs :: AdditionalFields -> [Pair]
-fieldsToPairs fields = foldWithKey f [] fields
+fieldsToPairs fields = foldrWithKey f [] fields
   where
     f key val xs = xs ++ [fieldToPair key val]
 
@@ -84,7 +106,7 @@ instance FromJSON GELF where
                          v .: "host" <*>
                          v .: "short_message" <*>
                          v .:? "long_message" <*>
-                         v .:? "timestamp" <*>
+                         (maybeParsePosixTime <$> (v .:? "timestamp")) <*>
                          v .:? "level" <*>
                          v .:? "facility" <*>
                          v .:? "line" <*>
@@ -93,4 +115,9 @@ instance FromJSON GELF where
   parseJSON _          = mzero
 
 parseRest :: Object -> Parser AdditionalFields
-parseRest m = undefined -- TODO
+parseRest m = pure $ HM.map f2 $ filterWithKey f m
+  where
+    f key _ = isPrefixOf "_" key
+    f2 (String t) = StringField t
+    f2 (Number n) = NumberField n
+    f2 _ = undefined
